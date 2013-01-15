@@ -3,13 +3,18 @@
 # ============================== SUMMARY =====================================
 #
 # Program : check_snmp_temperature.pl
-# Version : 0.35
-# Date    : Jan 11, 2012
+# Version : 0.40 (beta 2)
+# Date    : Mar 31, 2012
 # Author  : William Leibzon - william@leibzon.org
 # Summary : This is a nagios plugin that checks temperature sensors
 #           using SNMP. Dell, HP, Cisco and other types are supported
 #	    and for other systems OIDs can be easily specified too
 # Licence : GPL - summary below, text at http://www.fsf.org/licenses/gpl.txt
+#
+#  ********************* IMPORTANT NOTE ABOUT THIS VERSION ********************
+#  ***        THIS IS A BETA RELEASE WHICH HAS NOT BEEN FULLY TESTED       ****
+#  *** IF YOU NEED A STABLE VERSION, PLEASE GET 0.34 VERSION OF THIS PLUGIN ***
+#  ****************************************************************************
 #
 # =========================== PROGRAM LICENSE =================================
 #
@@ -145,6 +150,12 @@
 #
 # ==================== CHANGES/RELEASE, TODO  ==================================
 #
+# 0.1  - ??? 2006 : Simple plugin where temperature table OIDs were to be
+#		    specified directly as parameter. Was used for checking Dell
+# 0.2  - Aug 2006 : Support multiple types of equipment by using config
+#		    hash/array and --type parameter
+# 0.21 - Dec 2006 : Added support for Juniper and HP 
+# 0.22 - Dec 2006 : Added quick hack to interpret 0 value as "dont' check" threshold
 # 0.23 - Dec 2007 : Bug Fixes (especially one involving F as input format)
 # 0.3  - Jan 2008 : Added '-n' and '-d' options to specify exact list of
 #                   sensor names and oids.
@@ -164,16 +175,33 @@
 # 0.35 - Jan 2012 : Added reporting warning and critical threshold to
 #		    performance output (as 'name=temperature;warn;crit'
 #		    based on what become nagios standard for this info)
+# 		    Documentation history and todo updates (added 0.1 & 0.2
+#		    versions from below info to above), updated on todo
+# 0.36 - Jan 2012 : If data is missing return "UNKNOWN"
+#		    Added linux 'lmsensors' as type of device
+#		    In order to suppot this you need lmsensors package
+#		    and snmpd compiled as:
+#			--with-mib-modules="ucd-snmp/lmSensors ucd-snmp/diskio"
+# 0.40 (beta) - Mar 2012 :
+#                   I imported newest code from check_mysqld 0.93 to support full nagios
+#                   threshold specification (including ranges) as well as reporting
+#		    of warn/crit threshold in performance data. This changes internal
+#                   processing significantly and it needs to be tested. Unfortunately
+#		    I only support cloud environments and don't have anywhere to test
+#		    this at. Therefore I'm going to release this version to the public
+#		    and hope that if there are any errors, I'd get bug reports. After
+#		    period of 4 months, official (non-beta) 0.41 will be released.
 #
-# TODO and older revision history:
-#
+# TODO and older revision history: 
+#  -- TODO ON TODO --> since most of below is now done, it should be cleaned up in 0.41
+# 
 # 1. [DONE - Aug 2006] To support multiple types of equipment add config
 #    array/hash and --type parameter
 # 2. More plugin types for various other equipment need to be added ... 
 #    [DONE - Dec 2006] - added Juniper & HP
-# 3. Need to update warn & crit parameters parsing code so it would support
-#    both low and high values with '<' and '>' prefixed and using '~' for
-#    don't check rather then 0
+# 3. [DONE - Mar 2012] Need to update warn & crit parameters parsing code so
+#    it would support both low and high values with '<' and '>' prefixed and
+#    using '~' for don't check rather then 0
 #    [DONE - Dec 2006] - added quick hack to interpret empty values
 #    (i.e. -w ",90,") as dont check instead of specifying '0' directly
 #      Note: Low temperature value checks are rarely needed for network
@@ -181,11 +209,15 @@
 #            be done together with #4 most likely as part of some general
 #            library that would be shared with check_snmp_table and quite
 #            likely other plugins where multiple "attributes" are specified
-# 4. Support specifying table OIDs for temperature threashold values.
+# 4. [DONE - Mar 2012] Add threshold specification in nagios plugin spec compatible way
+#    as was done with check_mysqld 0.9 which uses code similar to this check 
+#    Add specifying of WARN & CRIT after actual value ';' in the perf output
+#    [DONE - Dec 2011] - added WARN & CRIT to perf, threshold spec still on todo
+# 5. Support specifying table OIDs for temperature threshold values.
 #    I'll do it only after adding optional file caching so these values
 #    can be retrieved about once every day rather then for each check.
 #
-# Note: if you want #3 or #4 done faster for specific application,
+# Note: if you want eny of that to be done faster for specific application,
 #       contact me privately to discuss
 #
 # ========================== START OF PROGRAM CODE ============================
@@ -223,6 +255,8 @@ my %system_types = ( "dell" => [ "1.3.6.1.4.1.674.10892.1.700.20.1.8", "1.3.6.1.
 		     "hp" => [ "1.3.6.1.4.1.232.6.2.6.8.1.3", "1.3.6.1.4.1.232.6.2.6.8.1.4", "C" ], 
 		     "alteon" => [ "", "", "C", ['RearLeftSensor', 'RearMiddleSensor', 'FrontMiddleSensor', 'FrontRightSensor'], ['1.3.6.1.4.1.1872.2.1.1.6.0','1.3.6.1.4.1.1872.2.1.1.7.0','1.3.6.1.4.1.1872.2.1.1.8.0','1.3.6.1.4.1.1872.2.1.1.9.0'] ], # why do they need to make these alteons so proprietory and hard to deal with?
 		     "baytech" => [ "1.3.6.1.4.1.4779.1.3.5.2.1.2", "1.3.6.1.4.1.4779.1.3.5.2.1.8", "10C" ],  # baytech pdu
+		     "lmsensors" => [ "1.3.6.1.4.1.2021.13.16.2.1.2", "1.3.6.1.4.1.2021.13.16.2.1.3", "1000C" ], #linux with lmsensors
+		     "linux" => [ "1.3.6.1.4.1.2021.13.16.2.1.2", "1.3.6.1.4.1.2021.13.16.2.1.3", "1000C" ],
 		   );
 # APC OID for the temperature is .1.3.6.1.4.1.318.1.1.2.1.1.0
 # APC OID for the humidity is .1.3.6.1.4.1.318.1.1.2.1.2.0
@@ -230,7 +264,7 @@ my %system_types = ( "dell" => [ "1.3.6.1.4.1.674.10892.1.700.20.1.8", "1.3.6.1.
 # HP switch temperature : .1.3.6.1.4.1.11.2.14.11.1.2.6.1.4.4
 # HP switch fan: .1.3.6.1.4.1.11.2.14.11.1.2.6.1.4.1
 
-my $Version='0.34';
+my $Version='0.40';
 
 my $o_host=     undef;          # hostname
 my $o_community= undef;         # community
@@ -277,7 +311,7 @@ my %hp_locale =  ( 1=> ['OTHER',1], 2=> ['UNKNOWN',1],  3=> ['System', 1], 4=> [
 sub print_version { print "$0: $Version\n" };
 
 sub print_usage {
-	print "Usage: $0 [-v] -H <host> -C <snmp_community> [-2] | (-l login -x passwd [-X pass -L <authp>,<privp>])  [-p <port>] [-t <timeout>] -T dell|hp|cisco1|juniper|alteon | [-N <oid_attribnames> -D <oid_attribdata>] | [-n <list of sensor names> -d <list of sensor oids>] [-a <attributes to check> -w <warn levels> -c <crit levels> [-f]] [-A <attributes for perfdata>] [-o <out_temp_unit: C|F|K>] [-i <in_temp_unit>] [-u <unknown_default>] [-V]\n";
+	print "Usage: $0 [-v] -H <host> -C <snmp_community> [-2] | (-l login -x passwd [-X pass -L <authp>,<privp>])  [-p <port>] [-t <timeout>] -T dell|hp|cisco1|juniper|alteon|lmsensors | [-N <oid_attribnames> -D <oid_attribdata>] | [-n <list of sensor names> -d <list of sensor oids>] [-a <attributes to check> -w <warn levels> -c <crit levels> [-f]] [-A <attributes for perfdata>] [-o <out_temp_unit: C|F|K>] [-i <in_temp_unit>] [-u <unknown_default>] [-V]\n";
 }
 
 # Return true if arg is a number
@@ -285,6 +319,107 @@ sub isnum {
 	my $num = shift;
 	if ( $num =~ /^(\d+\.?\d*)|(^\.\d+)$/ ) { return 1 ;}
 	return 0;
+}
+
+# function used when checking data against critical and warn values
+sub check_threshold {
+    my ($attrib, $data, $th_array, $o_ounit) = @_;
+    my $mod = $th_array->[0];
+    my $lv1 = $th_array->[1];
+    my $lv2 = $th_array->[2];
+
+    # verb("debug check_threshold: $mod : ".(defined($lv1)?$lv1:'')." : ".(defined($lv2)?$lv2:''));
+    return "" if !defined($lv1) || ($mod eq '' && $lv1 eq ''); 
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " = " . $lv1.$o_ounit if $mod eq '=' && $data eq $lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " != " . $lv1.$o_ounit if $mod eq '!' && $data ne $lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " > " . $lv1.$o_ounit if $mod eq '>' && $data>$lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " > " . $lv2.$o_ounit if $mod eq ':' && $data>$lv2;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " >= ". $lv1.$o_ounit if $mod eq '>=' && $data>=$lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " < "  . $lv1.$o_ounit if ($mod eq '<' || $mod eq ':') && $data<$lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit . " <= " . $lv1.$o_ounit if $mod eq '<=' && $data<=$lv1;
+    return " " . $attrib . " Temperature is " . $data . $o_ounit ." in range ". $lv1.$o_ounit."..".$lv2.$o_ounit if $mod eq '@' && $data>=$lv1 && $data<=$lv2;
+    return "";
+}
+
+# function called when parsing threshold options data
+sub parse_threshold {
+    my $thin = shift;
+
+    # link to an array that holds processed threshold data
+    # array: 1st is type of check, 2nd is value2, 3rd is value2, 4th is option, 5th is nagios spec string representation for perf out
+    my $th_array = [ '', undef, undef, '', '' ]; 
+    my $th = $thin;
+    my $at = '';
+
+    # take 3 ways to specify that there is no threshold
+    return $th_array if ($th eq '0' || $th eq '~' || $th eq '');
+
+    $at = $1 if $th =~ s/^(\^?[@|>|<|=|!]?~?)//; # check mostly for my own threshold format
+    $th_array->[3]='^' if $at =~ s/\^//; # deal with ^ option
+    $at =~ s/~//; # ignore ~ if it was entered
+    if ($th =~ /^\:([-|+]?\d+\.?\d*)/) { # :number format per nagios spec
+	$th_array->[1]=$1;
+	$th_array->[0]=($at !~ /@/)?'>':'<=';
+	$th_array->[5]=($at != /@/)?('~:'.$th_array->[1]):($th_array->[1].':');
+    }
+    elsif ($th =~ /([-|+]?\d+\.?\d*)\:$/) { # number: format per nagios spec
+        $th_array->[1]=$1;
+	$th_array->[0]=($at !~ /@/)?'<':'>=';
+	$th_array->[5]=($at != /@/)?'':'@';
+	$th_array->[5].=$th_array->[1].':';
+    }
+    elsif ($th =~ /([-|+]?\d+\.?\d*)\:([-|+]?\d+\.?\d*)/) { # nagios range format
+	$th_array->[1]=$1;
+	$th_array->[2]=$2;
+	if ($th_array->[1] > $th_array->[2]) {
+                print "Incorrect format in '$thin' - in range specification first number must be smaller then 2nd\n";
+                print_usage();
+                exit $ERRORS{"UNKNOWN"};
+	}
+	$th_array->[0]=($at !~ /@/)?':':'@';
+	$th_array->[5]=($at != /@/)?'':'@';
+	$th_array->[5].=$th_array->[1].':'.$th_array->[2];
+    }
+    if (!defined($th_array->[1])) {
+	$th_array->[0] = ($at eq '@')?'<=':$at;
+	$th_array->[1] = $th;
+	$th_array->[5] = '~:'.$th_array->[1] if ($th_array->[0] eq '>' || $th_array->[0] eq '>=');
+	$th_array->[5] = $th_array->[1].':' if ($th_array->[0] eq '<' || $th_array->[0] eq '<=');
+	$th_array->[5] = '@'.$th_array->[1].':'.$th_array->[1] if $th_array->[0] eq '=';
+	$th_array->[5] = $th_array->[1].':'.$th_array->[1] if $th_array->[0] eq '!';
+    }
+    if ($th_array->[0] =~ /[>|<]/ && !isnum($th_array->[1])) {
+	print "Numeric value required when '>' or '<' are used !\n";
+        print_usage();
+        exit $ERRORS{"UNKNOWN"};
+    }
+    # verb("debug parse_threshold: $th_array->[0] and $th_array->[1]");
+    $th_array->[0] = '=' if !$th_array->[0] && !isnum($th_array->[1]) && $th_array->[1] ne '';
+    if (!$th_array->[0] && isnum($th_array->[1])) { # this is just the number by itself, becomes 0:number check per nagios guidelines
+	$th_array->[2]=$th_array->[1];
+	$th_array->[1]=0;
+	$th_array->[0]=':';
+        $th_array->[5]=$th_array->[2];
+    }
+    return $th_array;
+}
+
+# this function checks that for numeric data warn threshold is within range of critical threshold
+# where within range depends on actual threshold spec and normally just means less
+sub threshold_specok {
+    my ($warn_thar,$crit_thar) = @_;
+    return 0 if (defined($warn_thar->[1]) && !isnum($warn_thar->[1])) || (defined($crit_thar->[1]) && !isnum($crit_thar->[1]));
+    return 1 if defined($warn_thar) && defined($warn_thar->[1]) &&
+                defined($crit_thar) && defined($crit_thar->[1]) &&
+                isnum($warn_thar->[1]) && isnum($crit_thar->[1]) &&
+                $warn_thar->[0] eq $crit_thar->[0] &&
+                (!defined($warn_thar->[3]) || $warn_thar->[3] !~ /\^/) &&
+                (!defined($crit_thar->[3]) || $crit_thar->[3] !~ /\^/) &&
+              (($warn_thar->[1]>$crit_thar->[1] && ($warn_thar->[0] =~ />/ || $warn_thar->[0] eq '@')) ||
+               ($warn_thar->[1]<$crit_thar->[1] && ($warn_thar->[0] =~ /</ || $warn_thar->[0] eq ':')) ||
+               ($warn_thar->[0] eq ':' && $warn_thar->[2]>=$crit_thar->[2]) ||
+               ($warn_thar->[0] eq '@' && $warn_thar->[2]<=$crit_thar->[2]));
+    return 0;  # return with 0 means specs check out and are ok
 }
 
 sub help {
@@ -313,9 +448,21 @@ sub help {
 -P, --port=PORT
    SNMP port (Default 161)
 -w, --warn=INT[,INT[,INT[..]]]
-	warning temperature level(s) (if more then one attribute is checked, must have multiple values)
+	Warning temperature level(s). The number of values listed here must exactly match number
+        of sensors listed with '-a'. The values specifify threshold for when Nagios should send
+        WARNING alert. All values are numbers and can have the following prefix modifiers:
+           > - warn if data is above this value (default for numeric values)
+           < - warn if data is below this value (must be followed by number)
+           = - warn if data is equal to this value (default for non-numeric values)
+           ! - warn if data is not equal to this value
+           ~ - do not check this data (must not be followed by number or ':')
+           ^ - this disables check that warning < critical
+        Threshold values can also be specified as range in two forms:
+           num1:num2  - warn if data is outside range i.e. if data<num1 or data>num2
+           \@num1:num2 - warn if data is in range i.e. data>=num1 && data<=num2
 -c, --crit=INT[,INT[,INT[..]]]
-	critical temperature level(s) (if more then one attribute is checked, must have multiple values)
+	Critical temperature level(s) (if more then one attribute is checked, must have multiple values)
+        The format is the same as with warning threshold levels.
 -f, --perfdata
 	Perfparse compatible output
 -t, --timeout=INTEGER
@@ -345,9 +492,9 @@ sub help {
  	where num is used if data is num*realdata, i.e. if reported data of 330 means 33C, then it is: -i 10C
 -u, --unknown_default=INT
         If attribute is not found then report the output as this number (i.e. -u 0)
--T, --type=dell|hp|cisco1|juniper|alteon
+-T, --type=dell|hp|cisco1|juniper|alteon|lmsensors
 	This allows to use pre-defined system type to set Base, Data OIDs and incoming temperature measurement type
-	Currently support systems types are: dell, hp, cisco1 (7500, 5500, 2948, etc), juniper, alteon
+	Currently support systems types are: dell, hp, cisco1 (7500, 5500, 2948, etc), juniper, alteon, lmsensors (linux using lmsensors package if snmp is compiled to support it)
 EOD
 }
 
@@ -364,18 +511,21 @@ $SIG{'ALRM'} = sub {
 sub convert_temp {
     my ($temp, $in_unit, $out_unit) = @_;
 
-    # that is not super great algorithm if both input and output are F
     my $in_mult = 1;
     my $ctemp = undef;
     $in_mult = $1 if $in_unit =~ /(\d+)\w/;
     $in_unit =~ s/\d+//;
+
+    # exit quickly avoiding conversion to and from C if both units are the same
+    return $temp / $in_mult if ($in_unit eq $out_unit);
+    # if units are not the same, we convert to/from C
     $ctemp = $temp / $in_mult if $in_unit eq 'C';
     $ctemp = ($temp / $in_mult - 32) / 1.8 if $in_unit eq 'F';
     $ctemp = $temp / $in_mult - 273.15 if $in_unit eq 'K';
     $ctemp = $temp / $in_mult if !defined($ctemp);
     return $ctemp if $out_unit eq "C";
     return $ctemp * 1.8 + 32 if $out_unit eq "F";
-    return $ctemp + 273.15 if $out_unit eq "K"; 
+    return $ctemp + 273.15 if $out_unit eq "K";
     return $ctemp; # should not get here
 }
 
@@ -465,41 +615,50 @@ sub check_options {
     if (scalar(@ar_sensornames)==0 && scalar(@ar_sensoroids)==0 && !(defined($oid_names) && defined($oid_data)))
 	{ print "Specify system type (-T) OR base SNMP OIDs for names (-N) and data (-D) tables OR exact list of sensor names (-n) and data OIDs (-d) !\n"; print_usage(); exit $ERRORS{"UNKNOWN"}; }
 
+    # below code is common for number of my plugins, including check_snmp_?, netstat, etc
+    # it is mostly compliant with nagios threshold specification (except use of '~')
+    # and adds number of additional format options using '>','<','!','=' prefixes
+    my (@ar_warnLv,@ar_critLv);
     if (defined($o_perfattr)) {
-        @o_perfattrL=split(/,/ ,$o_perfattr) if defined($o_perfattr);
+        @o_perfattrL=split(/,/ ,$o_perfattr);
     }
     if (defined($o_warn) || defined($o_crit) || defined($o_attr)) {
         if (defined($o_attr)) {
           @o_attrL=split(/,/, $o_attr);
-          @o_warnL=split(/,/ ,$o_warn) if defined($o_warn);
-          @o_critL=split(/,/ ,$o_crit) if defined($o_crit);
-        }
-        else {
-          print "Specifying warning and critical levels requires '-a' parameter with attribute names\n";
-          print_usage();
-          exit $ERRORS{"UNKNOWN"};
-        }
-        if (scalar(@o_warnL)!=scalar(@o_attrL) || scalar(@o_critL)!=scalar(@o_attrL)) {
-          printf "Number of spefied warning levels (%d) and critical levels (%d) must be equal to the number of attributes specified at '-a' (%d). If you need to ignore some attribute specify it as '0'\n", scalar(@o_warnL), scalar(@o_critL), scalar(@o_attrL);
-          print_usage();
-          exit $ERRORS{"UNKNOWN"};
+	  if (defined($o_warn)) {
+	     $o_warn.="~" if $o_warn =~ /,$/;
+	     @ar_warnLv=split( /,/ , lc $o_warn );
+	  }
+	  if (defined($o_crit)) {
+	     $o_crit.="~" if $o_crit =~ /,$/;
+    	     @ar_critLv=split( /,/ , lc $o_crit );
+	  }
 	}
-        for (my $i=0; $i<scalar(@o_attrL); $i++) {
-	  $o_warnL[$i]=0 if $o_warnL[$i] eq "";
-	  $o_critL[$i]=0 if $o_critL[$i] eq "";
-          if (!isnum($o_warnL[$i]) || !isnum($o_critL[$i])) {
-              print "Numeric value required for warning and critical !\n";
-              print_usage();
-              exit $ERRORS{"UNKNOWN"};
-          }
-          if ($o_warnL[$i] > $o_critL[$i] && $o_critL[$i]!=0) {
-             print "warning must be <= critical !\n";
-             print_usage();
-             exit $ERRORS{"UNKNOWN"};
-          }
+	else {
+	  print "Specifying warning and critical levels requires '-a' parameter with list of STATUS variables\n";
+	  print_usage();
+	  exit $ERRORS{"UNKNOWN"};
         }
+	if (scalar(@ar_warnLv)!=scalar(@o_attrL) || scalar(@ar_critLv)!=scalar(@o_attrL)) {
+	  printf "Number of specified warning levels (%d) and critical levels (%d) must be equal to the number of attributes specified at '-a' (%d). If you need to ignore some attribute do it as ',,'\n", scalar(@ar_warnLv), scalar(@ar_critLv), scalar(@o_attrL); 
+	  verb("Warning Levels: ".join(",",@ar_warnLv));
+	  verb("Critical Levels: ".join(",",@ar_critLv));
+	  print_usage();
+	  exit $ERRORS{"UNKNOWN"};
+	}
+	for (my $i=0; $i<scalar(@o_attrL); $i++) {
+          $o_warnL[$i] = parse_threshold($ar_warnLv[$i]);
+          $o_critL[$i] = parse_threshold($ar_critLv[$i]);
+	  if (threshold_specok($o_warnL[$i],$o_critL[$i])) {
+                 print "Numeric value required for warning and critical thresholds!\n";
+		 print "And warning must be less then critical (or greater then when '<' is used)\n";
+                 print "(to override warning<critical check prefix warning value with ^)\n";
+                 print_usage();
+                 exit $ERRORS{"UNKNOWN"};
+           }
+	}
     }
-    if (scalar(@o_attrL)==0 && scalar(@o_perfattrL)==0) {
+   if (scalar(@o_attrL)==0 && scalar(@o_perfattrL)==0) {
         print "You must specify list of attributes with either '-a' or '-A'\n";
         print_usage();
         exit $ERRORS{"UNKNOWN"};
@@ -584,11 +743,11 @@ my %dataresults;
 my $result;
 
 for ($i=0;$i<scalar(@o_attrL);$i++) {
-  $dataresults{$o_attrL[$i]} = ["check", undef, undef, undef, undef];
+  $dataresults{$o_attrL[$i]} = ["check", undef, undef, 0, 0];
 }
 if (defined($o_perfattr) && $o_perfattr ne '*') {
   for ($i=0;$i<scalar(@o_perfattrL);$i++) {
-    $dataresults{$o_perfattrL[$i]} = ["perf", undef, undef, undef, undef];
+    $dataresults{$o_perfattrL[$i]} = ["perf", undef, undef, 0, 0];
   }
 }
 
@@ -611,7 +770,7 @@ if (scalar(@ar_sensornames)==0) {
 	}	
         if (defined($o_perfattr) && $o_perfattr eq '*') {
                 $oid =~ s/$oid_names/$oid_data/;
-                $dataresults{$line} = ["perf", $oid, undef];
+                $dataresults{$line} = ["perf", $oid, undef, 0, 0];
                 unshift(@varlist,$oid);
                 verb("match found based on -A '*', now set to retrieve $oid");
         }
@@ -619,8 +778,7 @@ if (scalar(@ar_sensornames)==0) {
 	   if ($line =~ /$attr/ && !defined($dataresults{$attr}[1])) {
 		$oid =~ s/$oid_names/$oid_data/;
 		$dataresults{$attr}[1] = $oid;
-		unshift(@varlist,$oid) if !defined($varlist[0]) || 
-$varlist[0] ne $oid;
+		unshift(@varlist,$oid) if !defined($varlist[0]) || $varlist[0] ne $oid;
 		verb("match found for $attr, now set to retrieve $oid");
 		next L1;
 	   }
@@ -633,15 +791,14 @@ else {
 	$line=$ar_sensornames[$i];
 	$oid=$ar_sensoroids[$i];
         if (defined($o_perfattr) && $o_perfattr eq '*') {
-                $dataresults{$line} = ["perf", $oid, undef];
+                $dataresults{$line} = ["perf", $oid, undef, 0, 0];
                 unshift(@varlist,$oid);
                 verb("match found based on -A '*', now set to retrieve $oid");
         }
         L2: foreach $attr (keys %dataresults) {
            if ($line =~ /$attr/ && !defined($dataresults{$attr}[1])) {
                 $dataresults{$attr}[1] = $oid;
-                unshift(@varlist,$oid) if !defined($varlist[0]) || 
-$varlist[0] ne $oid;
+                unshift(@varlist,$oid) if !defined($varlist[0]) || $varlist[0] ne $oid;
                 verb("match found for $attr, now set to retrieve $oid");
                 next L2;
            }
@@ -654,6 +811,7 @@ my $statuscode = "OK";
 my $statusinfo = "";
 my $statusdata = "";
 my $perfdata = "";
+my $chk = "";
 
 verb("Getting SNMP data for oids" . join(" ",@varlist));
 $result = $session->get_request(
@@ -685,43 +843,51 @@ else {
 # loop to check if warning & critical attributes are ok
 for ($i=0;$i<scalar(@o_attrL);$i++) {
   if (defined($dataresults{$o_attrL[$i]}[2])) {
-    if ($dataresults{$o_attrL[$i]}[2]>$o_critL[$i] && $o_critL[$i]>0) {
-	$statuscode="CRITICAL";
-	$statusinfo .= " " . $o_attrL[$i] . " Temperature is " . $dataresults{$o_attrL[$i]}[2] . $o_ounit . " > ". $o_critL[$i] . $o_ounit;
+    if ($chk = check_threshold($o_attrL[$i],$dataresults{$o_attrL[$i]}[2],$o_critL[$i],$o_ounit)) {
+	$dataresults{$o_attrL[$i]}[3]++;
+	$statuscode = "CRITICAL";
+        $statusinfo .= $chk;
     }
-    elsif ($dataresults{$o_attrL[$i]}[2]>$o_warnL[$i] && $o_warnL[$i]>0) {
+    elsif ($chk = check_threshold($o_attrL[$i],$dataresults{$o_attrL[$i]}[2],$o_warnL[$i],$o_ounit)) {
+	$dataresults{$o_attrL[$i]}[3]++;
 	$statuscode="WARNING" if $statuscode eq "OK";
-	$statusinfo .= " " . $o_attrL[$i] . " Temperature is " . $dataresults{$o_attrL[$i]}[2] . $o_ounit . " > ". $o_warnL[$i] . $o_ounit;
+	$statusinfo .= $chk;
     }
-    else {
-	$statusdata .= "," if ($statusdata);
-	$statusdata .= " " . $o_attrL[$i] . " Temperature is " . $dataresults{$o_attrL[$i]}[2] . $o_ounit;
+    if ($dataresults{$o_attrL[$i]}[3]==0) {
+	  $dataresults{$o_attrL[$i]}[3]++;
+	  $statusdata .= "," if ($statusdata);
+	  $statusdata .= " " . $o_attrL[$i] . " Temperature is " . $dataresults{$o_attrL[$i]}[2] . $o_ounit;
     }
-    $dataresults{$o_attrL[$i]}[3] = $o_warnL[$i];
-    $dataresults{$o_attrL[$i]}[4] = $o_critL[$i];
-    $perfdata .= " " . $o_attrL[$i] . "=" . $dataresults{$o_attrL[$i]}[2].';'.$o_warnL[$i].';'.$o_critL[$i].';0' if defined($o_perf) && $dataresults{$o_attrL[$i]}[0] ne "perf";
+    if (defined($o_perf) && $dataresults{$o_attrL[$i]}[4]==0 && 
+        defined($o_warnL[$i][5]) && defined($o_critL[$i][5])) {
+	  $dataresults{$o_attrL[$i]}[4]++;
+          $perfdata .= " " . $o_attrL[$i] . "=" . $dataresults{$o_attrL[$i]}[2];
+	  $perfdata .= ';' if $o_warnL[$i][5] ne '' || $o_critL[$i][5] ne '';
+	  $perfdata .= $o_warnL[$i][5] if $o_warnL[$i][5] ne '';
+	  $perfdata .= ';'.$o_critL[$i][5] if $o_critL[$i][5] ne '';
+    }
   }
   else {
 	$statusdata .= "," if ($statusdata);
         $statusdata .= " $o_attrL[$i] data is missing";
+	$statuscode = "UNKNOWN" if $statuscode eq "OK";
   }
 }
 
 # add data for performance-only attributes
 if (defined($o_perfattr) && $o_perfattr eq '*') {
   foreach $attr (keys %dataresults) {
-     if ($dataresults{$attr}[0] eq "perf" && defined($dataresults{$attr}[2])) {
+     if ($dataresults{$attr}[0] eq "perf" && defined($dataresults{$attr}[2]) && $dataresults{$attr}[4]==0) {
+        $dataresults{$attr}[4]++;
 	$perfdata .= " " . $attr . "=" . $dataresults{$attr}[2];
      }
   }
 }
 else {
   for ($i=0;$i<scalar(@o_perfattrL);$i++) {
-     if (defined($dataresults{$o_perfattrL[$i]}[2])) {
+     if (defined($dataresults{$o_perfattrL[$i]}[2]) && $dataresults{$o_perfattrL[$i]}[4]==0) {
+	$dataresults{$o_perfattrL[$i]}[4]++;
 	$perfdata .= " " . $o_perfattrL[$i] . "=" . $dataresults{$o_perfattrL[$i]}[2];
-	if (defined($dataresults{$o_perfattrL[$i]}[3])) {
-		$perfdata .= ';'.$dataresults{$o_perfattrL[$i]}[3].';'.$dataresults{$o_perfattrL[$i]}[4].';';
-	}
      }
   }
 }
