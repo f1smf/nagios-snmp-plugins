@@ -279,6 +279,7 @@ my @o_critL=    ();             # array for above list
 my $o_perf=     undef;          # Performance data option
 my $o_timeout=  5;              # Default 5s Timeout
 my $o_version2= undef;          # use snmp v2c
+my $o_octetlength=undef;	# SNMP Message size parameter (Makina Corpus contrib)
 # SNMPv3 specific
 my $o_login=	undef;		# Login for snmpv3
 my $o_passwd=	undef;		# Pass for snmpv3
@@ -485,6 +486,10 @@ sub help {
 	ones listed in '-a' to only output attributes in perf data but not check. Special value of '*' gets them all.
 -f, --perfparse
         Used only with '-a'. Causes to output data not only in main status line but also as perfparse output
+-O, --octetlength=INTEGER
+        max-size of the SNMP message, usefull in case of Too Long responses.
+        Be carefull with network filters. Range 484 - 65535, default are
+    usually 1472,1452,1460 or 1440.
 -o  --out_temp_unit=C|F|K
 	What temperature measurement units are used for output and warning/critical - 'C', 'F' or 'K' - default is 'C'
 -i  --in_temp_unit=[num]C|F|K
@@ -546,6 +551,7 @@ sub check_options {
         '2'     => \$o_version2,        'v2c'           => \$o_version2,
         'c:s'   => \$o_crit,            'critical:s'    => \$o_crit,
         'w:s'   => \$o_warn,            'warn:s'        => \$o_warn,
+	'O:i'   => \$o_octetlength,    	'octetlength:i' => \$o_octetlength,
         'f'     => \$o_perf,            'perfparse'      => \$o_perf,
         'a:s'   => \$o_attr,         	'attributes:s' 	=> \$o_attr,
 	'A:s'	=> \$o_perfattr,	'perf_attributes:s' => \$o_perfattr,
@@ -579,6 +585,10 @@ sub check_options {
 	  if ((defined ($v3proto[1])) && (!defined($o_privpass))) {
 	    print "Put snmp V3 priv login info with priv protocols!\n"; print_usage(); exit $ERRORS{"UNKNOWN"}}
 	}
+    #### octet length checks
+    if (defined ($o_octetlength) && (!isnum($o_octetlength) || $o_octetlength > 65535 || $o_octetlength < 484 )) {
+        print "octet length ($o_octetlength) must be < 65535 and > 484\n";print_usage(); exit $ERRORS{"UNKNOWN"};
+        }
     $o_ounit =~ tr/[a-z]/[A-Z]/;
     if ($o_ounit ne 'C' && $o_ounit ne 'F' && $o_ounit ne 'K') 
 	{ print "Invalid output measurement unit specified!\n"; print_usage(); exit $ERRORS{"UNKNOWN"}; }
@@ -731,6 +741,20 @@ if ( defined($o_login) && defined($o_passwd)) {
 if (!defined($session)) {
    printf("ERROR opening session: %s.\n", $error);
    exit $ERRORS{"UNKNOWN"};
+}
+
+if (defined($o_octetlength)) {
+	my $oct_resultat=undef;
+	my $oct_test=$session->max_msg_size();
+	verb(" actual max octets:: $oct_test");
+	$oct_resultat = $session->max_msg_size($o_octetlength);
+	if (!defined($oct_resultat)) {
+		 printf("ERROR: Session settings : %s.\n", $session->error);
+		 $session->close;
+		 exit $ERRORS{"UNKNOWN"};
+	}
+	$oct_test= $session->max_msg_size();
+	verb(" new max octets:: $oct_test");
 }
 
 # next part of the code builds list of attributes to be retrieved
