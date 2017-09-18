@@ -43,14 +43,14 @@ my $info = new SNMP::Info(
 		Debug		=>	1,
 		# The rest is passed to SNMP::Session
 		DestHost	=>	shift,
-	#	Community	=>	'public',
-	#	Version		=>	2
-		Version		=>	3,
-		SecName		=>	'intradef',
-		AuthProto	=>	'MD5',
-		SecLevel	=>	'authNoPriv',
-		AuthPass	=>	shift,
-		Context		=>  shift,
+		Community	=>	'public',
+		Version		=>	2
+#		Version		=>	3,
+#		SecName		=>	'',
+#		AuthProto	=>	'MD5',
+#		SecLevel	=>	'authNoPriv',
+#		AuthPass	=>	shift,
+#		Context		=>  shift,
 	) or die "Can't connect to device.\n";
 
 my $err = $info->error();
@@ -64,17 +64,15 @@ print "SNMP::Info is using this device class : $class\n";
 
 print "Name: $name\n";
 print "$vendor ($os)\n";
-exit 0;
 
 #print STDERR "DEBUG: info = ". Dumper($info) ."\n";
 
 # Find out the Duplex status for the ports
 my $interfaces = $info->ports;
 my $ifDescr = $info->i_description();
-#for (my $i=1; $i<= $interfaces; $i++ ) {
-foreach my $interface ( sort keys %$ifDescr ) {
-	print "interface ". $interface .": ". $$ifDescr{$interface} ."\n";
-}
+#foreach my $interface ( sort keys %$ifDescr ) {
+#	print "interface ". $interface .": ". $$ifDescr{$interface} ."\n";
+#}
 #my $i_duplex   = $info->i_duplex();
 
 my $memory = $info->memory_size();
@@ -96,8 +94,9 @@ foreach my $partition ( sort keys %$hrStorageDescr ) {
 			." size=". $$hrStorageSize{$partition} 
 			." used=". $$hrStorageUsed{$partition}
 			." unit=". $$hrStorageAllocationUnits{$partition}
-			." hrfsindex=". map_fs_index( $hrFSIndex, $partition )
+#			." hrfsindex=". map_fs_index( $hrFSIndex, $partition )
 			."\n";
+}
 
 exit 0;
 
@@ -106,11 +105,10 @@ sub map_fs_index {
     my $hrfsindex		= shift;
     my $partial  		= shift;
 
-    my $fs_index;
+    my %fs_index;
     foreach my $iid ( keys %$hrfsindex ) {
         $fs_index{$iid} = $iid;
     }
 
-    return $fs_index;
+    return %fs_index;
 }
-
